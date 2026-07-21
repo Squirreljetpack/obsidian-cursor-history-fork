@@ -27,8 +27,12 @@ export interface PreviewHistoryEntry {
 export type HistoryEntry = EditHistoryEntry | PreviewHistoryEntry;
 
 export class NavigationStack {
-	private stack: HistoryEntry[] = [];
-	private index = -1;
+	private editStack: EditHistoryEntry[] = [];
+	private editIndex = -1;
+
+	private previewStack: PreviewHistoryEntry[] = [];
+	private previewIndex = -1;
+
 	private maxSize: number;
 
 	constructor(maxSize = 50) {
@@ -41,109 +45,181 @@ export class NavigationStack {
 	}
 
 	push(entry: HistoryEntry): void {
-		// Deduplicate: if current entry is same mode, file, and position, update it instead
-		if (this.index >= 0 && this.index < this.stack.length) {
-			const current = this.stack[this.index];
-			if (current.filePath === entry.filePath && current.mode === entry.mode) {
-				if (entry.mode === 'edit' && current.mode === 'edit') {
-					if (current.selection.startLine === entry.selection.startLine) {
-						this.stack[this.index] = entry;
-						return;
-					}
-				} else if (entry.mode === 'preview' && current.mode === 'preview') {
-					if (Math.abs(current.selection.scrollLine - entry.selection.scrollLine) < 3) {
-						this.stack[this.index] = entry;
-						return;
-					}
-				}
+		if (entry.mode === 'edit') {
+			this.pushEdit(entry);
+		} else {
+			this.pushPreview(entry);
+		}
+	}
+
+	private pushEdit(entry: EditHistoryEntry): void {
+		if (this.editIndex >= 0 && this.editIndex < this.editStack.length) {
+			const current = this.editStack[this.editIndex];
+			if (current.filePath === entry.filePath && current.selection.startLine === entry.selection.startLine) {
+				this.editStack[this.editIndex] = entry;
+				return;
 			}
 		}
 
-		// Discard forward history when pushing a new branch point
-		if (this.index < this.stack.length - 1) {
-			this.stack = this.stack.slice(0, this.index + 1);
+		if (this.editIndex < this.editStack.length - 1) {
+			this.editStack = this.editStack.slice(0, this.editIndex + 1);
 		}
 
-		this.stack.push(entry);
-		this.index = this.stack.length - 1;
+		this.editStack.push(entry);
+		this.editIndex = this.editStack.length - 1;
+		this.enforceMaxSize();
+	}
 
+	private pushPreview(entry: PreviewHistoryEntry): void {
+		if (this.previewIndex >= 0 && this.previewIndex < this.previewStack.length) {
+			const current = this.previewStack[this.previewIndex];
+			if (current.filePath === entry.filePath && Math.abs(current.selection.scrollLine - entry.selection.scrollLine) < 3) {
+				this.previewStack[this.previewIndex] = entry;
+				return;
+			}
+		}
+
+		if (this.previewIndex < this.previewStack.length - 1) {
+			this.previewStack = this.previewStack.slice(0, this.previewIndex + 1);
+		}
+
+		this.previewStack.push(entry);
+		this.previewIndex = this.previewStack.length - 1;
 		this.enforceMaxSize();
 	}
 
 	replaceCurrent(entry: HistoryEntry): void {
-		if (this.index >= 0 && this.index < this.stack.length) {
-			this.stack[this.index] = entry;
+		if (entry.mode === 'edit') {
+			if (this.editIndex >= 0 && this.editIndex < this.editStack.length) {
+				this.editStack[this.editIndex] = entry;
+			} else {
+				this.pushEdit(entry);
+			}
 		} else {
-			this.push(entry);
+			if (this.previewIndex >= 0 && this.previewIndex < this.previewStack.length) {
+				this.previewStack[this.previewIndex] = entry;
+			} else {
+				this.pushPreview(entry);
+			}
 		}
 	}
 
-	goBack(): HistoryEntry | null {
-		if (this.index <= 0) return null;
-		this.index--;
-		return this.stack[this.index];
+	goBack(mode: 'edit' | 'preview'): HistoryEntry | null {
+		if (mode === 'edit') {
+			if (this.editIndex <= 0) return null;
+			this.editIndex--;
+			return this.editStack[this.editIndex];
+		} else {
+			if (this.previewIndex <= 0) return null;
+			this.previewIndex--;
+			return this.previewStack[this.previewIndex];
+		}
 	}
 
-	goForward(): HistoryEntry | null {
-		if (this.index >= this.stack.length - 1) return null;
-		this.index++;
-		return this.stack[this.index];
+	goForward(mode: 'edit' | 'preview'): HistoryEntry | null {
+		if (mode === 'edit') {
+			if (this.editIndex >= this.editStack.length - 1) return null;
+			this.editIndex++;
+			return this.editStack[this.editIndex];
+		} else {
+			if (this.previewIndex >= this.previewStack.length - 1) return null;
+			this.previewIndex++;
+			return this.previewStack[this.previewIndex];
+		}
 	}
 
-	getCurrent(): HistoryEntry | null {
-		if (this.index >= 0 && this.index < this.stack.length) {
-			return this.stack[this.index];
+	getCurrent(mode: 'edit' | 'preview'): HistoryEntry | null {
+		if (mode === 'edit') {
+			if (this.editIndex >= 0 && this.editIndex < this.editStack.length) {
+				return this.editStack[this.editIndex];
+			}
+		} else {
+			if (this.previewIndex >= 0 && this.previewIndex < this.previewStack.length) {
+				return this.previewStack[this.previewIndex];
+			}
 		}
 		return null;
 	}
 
 	findLatestForFile(filePath: string, mode?: 'edit' | 'preview'): HistoryEntry | null {
-		for (let i = this.stack.length - 1; i >= 0; i--) {
-			const item = this.stack[i];
-			if (item.filePath === filePath) {
-				if (!mode || item.mode === mode) {
-					return item;
-				}
+		if (mode === 'edit') {
+			for (let i = this.editStack.length - 1; i >= 0; i--) {
+				if (this.editStack[i].filePath === filePath) return this.editStack[i];
 			}
+			return null;
+		} else if (mode === 'preview') {
+			for (let i = this.previewStack.length - 1; i >= 0; i--) {
+				if (this.previewStack[i].filePath === filePath) return this.previewStack[i];
+			}
+			return null;
 		}
-		return null;
+
+		// Mode omitted: check both stacks for latest
+		const lastEdit = this.editStack.slice().reverse().find(e => e.filePath === filePath);
+		const lastPreview = this.previewStack.slice().reverse().find(e => e.filePath === filePath);
+
+		if (!lastEdit) return lastPreview || null;
+		if (!lastPreview) return lastEdit;
+
+		return (lastEdit.timestamp || 0) >= (lastPreview.timestamp || 0) ? lastEdit : lastPreview;
 	}
 
-	getStack(): HistoryEntry[] {
-		return [...this.stack];
+	getStack(mode?: 'edit' | 'preview'): HistoryEntry[] {
+		if (mode === 'edit') return [...this.editStack];
+		if (mode === 'preview') return [...this.previewStack];
+		return [...this.editStack, ...this.previewStack];
 	}
 
-	getIndex(): number {
-		return this.index;
-	}
+	setStack(entries: HistoryEntry[]): void {
+		const list = Array.isArray(entries) ? entries : [];
+		this.editStack = list.filter((e): e is EditHistoryEntry => e.mode === 'edit');
+		this.editIndex = this.editStack.length - 1;
 
-	setStack(entries: HistoryEntry[], index?: number): void {
-		this.stack = Array.isArray(entries) ? [...entries] : [];
+		this.previewStack = list.filter((e): e is PreviewHistoryEntry => e.mode === 'preview');
+		this.previewIndex = this.previewStack.length - 1;
+
 		this.enforceMaxSize();
-		if (typeof index === 'number' && index >= 0 && index < this.stack.length) {
-			this.index = index;
-		} else {
-			this.index = this.stack.length - 1;
-		}
 	}
 
 	purgeInvalid(isValidFn: (filePath: string) => boolean): void {
-		const currentEntry = this.getCurrent();
-		this.stack = this.stack.filter(entry => isValidFn(entry.filePath));
-		if (currentEntry && isValidFn(currentEntry.filePath)) {
-			this.index = this.stack.indexOf(currentEntry);
-			if (this.index === -1) this.index = this.stack.length - 1;
+		const currEdit = this.getCurrent('edit');
+		this.editStack = this.editStack.filter(e => isValidFn(e.filePath));
+		if (currEdit && isValidFn(currEdit.filePath)) {
+			this.editIndex = this.editStack.indexOf(currEdit as EditHistoryEntry);
+			if (this.editIndex === -1) this.editIndex = this.editStack.length - 1;
 		} else {
-			this.index = this.stack.length - 1;
+			this.editIndex = this.editStack.length - 1;
+		}
+
+		const currPreview = this.getCurrent('preview');
+		this.previewStack = this.previewStack.filter(e => isValidFn(e.filePath));
+		if (currPreview && isValidFn(currPreview.filePath)) {
+			this.previewIndex = this.previewStack.indexOf(currPreview as PreviewHistoryEntry);
+			if (this.previewIndex === -1) this.previewIndex = this.previewStack.length - 1;
+		} else {
+			this.previewIndex = this.previewStack.length - 1;
+		}
+	}
+
+	clearForFile(filePath: string, mode?: 'edit' | 'preview'): void {
+		if (!mode || mode === 'edit') {
+			this.editStack = this.editStack.filter(e => e.filePath !== filePath);
+			this.editIndex = this.editStack.length - 1;
+		}
+		if (!mode || mode === 'preview') {
+			this.previewStack = this.previewStack.filter(e => e.filePath !== filePath);
+			this.previewIndex = this.previewStack.length - 1;
 		}
 	}
 
 	private enforceMaxSize(): void {
-		while (this.stack.length > this.maxSize) {
-			this.stack.shift();
-			if (this.index > 0) {
-				this.index--;
-			}
+		while (this.editStack.length > this.maxSize) {
+			this.editStack.shift();
+			if (this.editIndex > 0) this.editIndex--;
+		}
+		while (this.previewStack.length > this.maxSize) {
+			this.previewStack.shift();
+			if (this.previewIndex > 0) this.previewIndex--;
 		}
 	}
 }

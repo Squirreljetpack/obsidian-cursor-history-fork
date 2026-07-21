@@ -1,7 +1,6 @@
 import { HistoryEntry, EditHistoryEntry, PreviewHistoryEntry } from './navigation-stack';
 
 export enum CompareResult {
-	IDENTICAL,
 	SIMILAR,
 	DIFFERENT,
 }
@@ -9,48 +8,50 @@ export enum CompareResult {
 export function compareEditSelections(
 	a: EditHistoryEntry['selection'],
 	b: EditHistoryEntry['selection'],
-	jumpThreshold = 10
+	editThreshold = 1
 ): CompareResult {
 	const lineA = Math.min(a.startLine, a.endLine);
 	const lineB = Math.min(b.startLine, b.endLine);
 
-	if (lineA === lineB) return CompareResult.IDENTICAL;
-	if (Math.abs(lineA - lineB) < jumpThreshold) return CompareResult.SIMILAR;
-	return CompareResult.DIFFERENT;
+	if (Math.abs(lineA - lineB) > editThreshold) {
+		return CompareResult.DIFFERENT;
+	}
+	return CompareResult.SIMILAR;
 }
 
 export function comparePreviewSelections(
 	a: PreviewHistoryEntry['selection'],
 	b: PreviewHistoryEntry['selection'],
-	jumpThreshold = 10
+	previewThreshold = 10
 ): CompareResult {
-	if (a.scrollLine === b.scrollLine || Math.abs(a.scrollTop - b.scrollTop) < 10) {
-		return CompareResult.IDENTICAL;
-	}
-	if (Math.abs(a.scrollLine - b.scrollLine) < jumpThreshold) {
+	if (a.scrollLine !== 0 || b.scrollLine !== 0) {
+		if (Math.abs(a.scrollLine - b.scrollLine) > previewThreshold) {
+			return CompareResult.DIFFERENT;
+		}
 		return CompareResult.SIMILAR;
 	}
-	return CompareResult.DIFFERENT;
+
+	const diff = Math.abs(a.scrollTop - b.scrollTop);
+	if (diff > previewThreshold * 30) {
+		return CompareResult.DIFFERENT;
+	}
+	return CompareResult.SIMILAR;
 }
 
 export function shouldCreateNewEntry(
 	current: HistoryEntry | null,
 	incoming: HistoryEntry,
-	isJump = false,
-	jumpThreshold = 10
+	editThreshold = 1,
+	previewThreshold = 10
 ): boolean {
 	if (!current) return true;
 	if (current.filePath !== incoming.filePath) return true;
 	if (current.mode !== incoming.mode) return true;
 
 	if (current.mode === 'edit' && incoming.mode === 'edit') {
-		const result = compareEditSelections(current.selection, incoming.selection, jumpThreshold);
-		if (result === CompareResult.SIMILAR && isJump) return true;
-		return result === CompareResult.DIFFERENT;
+		return compareEditSelections(current.selection, incoming.selection, editThreshold) === CompareResult.DIFFERENT;
 	} else if (current.mode === 'preview' && incoming.mode === 'preview') {
-		const result = comparePreviewSelections(current.selection, incoming.selection, jumpThreshold);
-		if (result === CompareResult.SIMILAR && isJump) return true;
-		return result === CompareResult.DIFFERENT;
+		return comparePreviewSelections(current.selection, incoming.selection, previewThreshold) === CompareResult.DIFFERENT;
 	}
 
 	return true;

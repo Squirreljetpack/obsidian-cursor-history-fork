@@ -9,32 +9,39 @@ pre .code-fold-btn {
 	position: absolute;
 	top: 6px;
 	right: 40px; /* Positioned to the left of Obsidian's copy button */
-	background: transparent;
-	border: none;
+	width: 24px;
+	height: 24px;
+	background: none !important;
+	background-color: transparent !important;
+	border: none !important;
+	box-shadow: none !important;
+	outline: none !important;
 	color: var(--text-muted);
 	cursor: pointer;
-	font-size: 11px;
-	padding: 2px 6px;
-	border-radius: 4px;
-	opacity: 0.6;
-	transition: opacity 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+	opacity: 0.7;
+	transition: opacity 0.15s ease, color 0.15s ease;
 	z-index: 2;
 	display: inline-flex;
 	align-items: center;
 	justify-content: center;
-	line-height: 1;
+	padding: 0;
+	margin: 0;
+	appearance: none;
+	-webkit-appearance: none;
+}
+
+pre .code-fold-btn svg {
+	width: 16px;
+	height: 16px;
+	stroke-width: 2px;
+	fill: none;
 }
 
 pre .code-fold-btn:hover {
 	opacity: 1;
 	color: var(--text-normal);
-	background-color: var(--background-modifier-hover);
-}
-
-/* If Obsidian copy button is present, ensure correct spacing */
-pre .copy-code-button + .code-fold-btn,
-pre .code-fold-btn + .copy-code-button {
-	margin-right: 4px;
+	background: none !important;
+	background-color: transparent !important;
 }
 
 /* Collapsed code block state */
@@ -43,6 +50,7 @@ pre.is-collapsed code {
 }
 
 pre.is-collapsed {
-	padding-bottom: 6px !important;
-	min-height: 34px;
+	min-height: 36px !important;
+	height: 36px !important;
+	box-sizing: border-box !important;
 }

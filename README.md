@@ -1,49 +1,52 @@
 # Cursor History
 
-An [Obsidian](https://obsidian.md) plugin that tracks cursor position history across files and lets you navigate back and forward, like VS Code's `workbench.action.navigateBack` / `workbench.action.navigateForward`.
+An [Obsidian](https://obsidian.md) plugin that tracks cursor position history across files and lets you navigate back and forward. It can also remember your cursor positions and folded code blocks across files and restore them on reload.
 
 ## Features
 
-- Tracks cursor positions across files with a 10-line threshold (small movements update the current entry, large jumps create new ones)
-- Navigate back and forward through your cursor history
-- Browser-style stack: going back then moving somewhere new clears the forward history
-- Session-based, max 50 entries
+- **Cursor Navigation**: Navigate back and forward through cursor history across files and notes (Edit & Reading views).
+- **Position Heuristic**: Configurable line threshold (default 10 lines) creates history entries on larger jumps while updating in place for small movements.
+- **Link Jump Tracking**: Intercepts internal link clicks (`[[note]]`) to capture your source position before navigation occurs.
+- **History Navigator Modal**: Fuzzy search history modal (`Cursor History: Open history navigator`) to preview and jump to any recorded position for your active mode.
+- **Scroll Position Restoration**: Restores exact scroll/line positions automatically when reopening files.
+- **Folder-Local History**: Optional persistence to `.obsidian/cursor-history.json` inside your vault.
+- **Code Block Folding (Reading Mode)**: Toggle fold code blocks in Reading mode with state persisted in `.obsidian/code-fold-history.json` and automatic pruning of missing block signatures.
 
 ## Installation
 
-### From Obsidian Community Plugins
+### Via BRAT (Recommended)
 
-1. Open **Settings > Community plugins**
-2. Search for **Cursor History**
-3. Click **Install**, then **Enable**
+1. Install **BRAT** from Community Plugins.
+2. Open BRAT settings -> **Add Beta plugin**.
+3. Enter `Squirreljetpack/obsidian-cursor-history-fork`.
 
 ### Manual Installation
 
-1. Download `main.js` and `manifest.json` from the [latest release](https://github.com/AbdelrahmanHafez/obsidian-cursor-history/releases/latest)
-2. Create a folder `cursor-history` inside your vault's `.obsidian/plugins/` directory
-3. Place the downloaded files inside that folder
-4. Reload Obsidian and enable the plugin in **Settings > Community plugins**
+1. Download `main.js`, `styles.css`, and `manifest.json` from the [latest release](https://github.com/Squirreljetpack/obsidian-cursor-history-fork/releases/latest).
+2. Create a folder `cursor-history` inside your vault's `.obsidian/plugins/` directory.
+3. Place the downloaded files inside that folder.
+4. Reload Obsidian and enable the plugin in **Settings > Community plugins**.
 
-## Configuration
+## Commands & Configuration
 
 Default keybindings are set up automatically on first install:
 
 | Command | Default Binding |
 |---------|-----------------|
-| Cursor History: Go back | Ctrl+Cmd+← |
-| Cursor History: Go forward | Ctrl+Cmd+→ |
+| Cursor History: Go back | Cmd+[ (`Mod+[`) |
+| Cursor History: Go forward | Cmd+] (`Mod+]`) |
+| Cursor History: Open history navigator | (Unbound) |
 
 To change them, open **Settings > Hotkeys** and search for "Cursor History".
 
 ## How It Works
 
-The plugin uses VS Code's position-based heuristic (not timer-based polling):
+The plugin uses VS Code's position-based heuristic:
 
-- **Same line**: updates the current history entry (no new stop)
-- **Within 10 lines**: updates the current entry
-- **10+ lines apart**: creates a new history entry
-- **Different file**: always creates a new entry
-- **Going back then navigating**: clears forward history (browser-style)
+- **Same line / Within threshold**: updates the current history entry
+- **10+ lines apart / Different file**: creates a new history entry
+- **Internal link click**: captures exact source position prior to page transition
+- **Going back then navigating**: clears forward history (browser-style stack)
 
 ## License
 
