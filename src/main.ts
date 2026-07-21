@@ -1,9 +1,10 @@
-import { MarkdownView, Plugin, TFile } from 'obsidian';
-import { keymap } from '@codemirror/view';
-import { EditorView, ViewUpdate } from '@codemirror/view';
+import { MarkdownView, Plugin, TFile, WorkspaceLeaf } from 'obsidian';
+import { keymap, EditorView, ViewUpdate } from '@codemirror/view';
 import { Extension } from '@codemirror/state';
-import { NavigationStack, HistoryEntry } from './navigation-stack';
+import { NavigationStack, HistoryEntry, EditHistoryEntry, PreviewHistoryEntry } from './navigation-stack';
 import { shouldCreateNewEntry } from './selection-state';
+import { CursorHistorySettings, DEFAULT_SETTINGS, CursorHistorySettingTab } from './settings';
+import { HistoryNavigatorModal } from './history-navigator-modal';
 
 // --- Obsidian type augmentation for undocumented APIs ---
 
@@ -20,10 +21,11 @@ declare module 'obsidian' {
 			load(): Promise<void>;
 		};
 	}
-}
-
-interface PluginData {
-	hotkeyDefaultsApplied?: boolean;
+	interface MarkdownPreviewView {
+		getScroll(): number;
+		applyScroll(scrollLine: number): void;
+		containerEl: HTMLElement;
+	}
 }
 
 const DESIRED_HOTKEYS: Record<string, ObsidianHotkey> = {
@@ -31,18 +33,21 @@ const DESIRED_HOTKEYS: Record<string, ObsidianHotkey> = {
 	'cursor-history:go-forward': { modifiers: ['Ctrl', 'Mod'], key: 'ArrowRight' },
 };
 
-// --- Plugin ---
-
 export default class CursorHistoryPlugin extends Plugin {
-	private navStack = new NavigationStack();
+	settings: CursorHistorySettings = DEFAULT_SETTINGS;
+	private navStack = new NavigationStack(50);
 	private currentState: HistoryEntry | null = null;
 	private isNavigating = false;
 	private hotkeyExtension: Extension[] = [];
-	private pluginData: PluginData = {};
+	private saveTimeoutId: number | null = null;
+	private lastActiveLeaf: WorkspaceLeaf | null = null;
 
 	async onload() {
-		this.pluginData = (await this.loadData()) || {};
+		await this.loadSettings();
 
+		this.addSettingTab(new CursorHistorySettingTab(this.app, this));
+
+		// Commands
 		this.addCommand({
 			id: 'go-back',
 			name: 'Go back',
@@ -55,15 +60,56 @@ export default class CursorHistoryPlugin extends Plugin {
 			callback: () => void this.goForward(),
 		});
 
-		// Listen for file switches
+		this.addCommand({
+			id: 'open-history-navigator',
+			name: 'Open history navigator',
+			callback: () => {
+				new HistoryNavigatorModal(this.app, this).open();
+			},
+		});
+
+		// Capturing phase DOM click listener for internal links (Reading View & Edit View)
+		this.registerDomEvent(
+			document,
+			'click',
+			(evt: MouseEvent) => {
+				const target = evt.target as HTMLElement | null;
+				const linkEl = target?.closest('a.internal-link');
+				if (linkEl) {
+					// Record exact source position immediately before internal link navigation occurs
+					this.recordCurrentPosition(true);
+				}
+			},
+			true // useCapture phase
+		);
+
+		// Listen for workspace leaf changes (tab switch / note navigation)
 		this.registerEvent(
-			this.app.workspace.on('active-leaf-change', () => {
+			this.app.workspace.on('active-leaf-change', (leaf) => {
 				if (this.isNavigating) return;
+				if (this.lastActiveLeaf && this.lastActiveLeaf !== leaf) {
+					this.recordPositionForLeaf(this.lastActiveLeaf, true);
+				}
+				this.lastActiveLeaf = leaf;
 				this.recordCurrentPosition();
 			})
 		);
 
-		// Listen for cursor changes within editors via CM6
+		// Listen for file opening in normal way to restore scroll position
+		this.registerEvent(
+			this.app.workspace.on('file-open', (file) => {
+				if (!file || this.isNavigating || !this.settings.restoreScrollPosition) return;
+
+				const entry = this.navStack.findLatestForFile(file.path);
+				if (entry) {
+					setTimeout(() => {
+						void this.navigateTo(entry, true);
+					}, 50);
+				}
+			})
+		);
+
+		// Listen for cursor changes within CM6 editors (Edit Mode)
 		this.registerEditorExtension(
 			EditorView.updateListener.of((update: ViewUpdate) => {
 				if (this.isNavigating) return;
@@ -79,7 +125,7 @@ export default class CursorHistoryPlugin extends Plugin {
 			})
 		);
 
-		// CM6 keymaps for key-repeat support
+		// Keymaps for key-repeat support
 		this.registerEditorExtension(this.hotkeyExtension);
 		this.app.workspace.onLayoutReady(async () => {
 			await this.applyDefaultHotkeys();
@@ -90,8 +136,178 @@ export default class CursorHistoryPlugin extends Plugin {
 		);
 	}
 
+	async onunload() {
+		await this.saveHistoryStackImmediate();
+	}
+
+	getNavStack(): NavigationStack {
+		return this.navStack;
+	}
+
+	updateMaxEntries(size: number): void {
+		this.navStack.setMaxSize(size);
+	}
+
+	async loadSettings(): Promise<void> {
+		const rawData = (await this.loadData()) || {};
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, rawData);
+		this.navStack.setMaxSize(this.settings.maxEntries);
+		await this.loadHistoryStack();
+	}
+
+	async saveSettings(): Promise<void> {
+		await this.saveData(this.settings);
+	}
+
+	async saveSettingsAndHistory(): Promise<void> {
+		await this.saveSettings();
+		await this.saveHistoryStackImmediate();
+	}
+
+	private getHistoryFilePath(): string {
+		return `${this.app.vault.configDir}/cursor-history.json`;
+	}
+
+	private isValidFilePath(filePath: string): boolean {
+		if (!filePath || typeof filePath !== 'string') return false;
+		if (filePath.startsWith('!') || filePath.includes('![[')) return false;
+		if (filePath.includes('..') || filePath.includes('\0')) return false;
+
+		const abstractFile = this.app.vault.getAbstractFileByPath(filePath);
+		return abstractFile instanceof TFile && abstractFile.extension === 'md';
+	}
+
+	private cleanupInvalidDbEntries(): void {
+		this.navStack.purgeInvalid(this.isValidFilePath.bind(this));
+	}
+
+	private async loadHistoryStack(): Promise<void> {
+		let loadedEntries: HistoryEntry[] = [];
+
+		if (this.settings.useFolderLocalHistory) {
+			const path = this.getHistoryFilePath();
+			try {
+				if (await this.app.vault.adapter.exists(path)) {
+					const content = await this.app.vault.adapter.read(path);
+					loadedEntries = JSON.parse(content);
+				}
+			} catch (err) {
+				console.error('Cursor History: Error reading folder local history file:', err);
+			}
+		} else {
+			const rawData = (await this.loadData()) || {};
+			if (Array.isArray(rawData.historyStack)) {
+				loadedEntries = rawData.historyStack;
+			}
+		}
+
+		this.navStack.setStack(loadedEntries);
+		this.cleanupInvalidDbEntries();
+	}
+
+	private scheduleHistorySave(): void {
+		if (this.saveTimeoutId !== null) {
+			window.clearTimeout(this.saveTimeoutId);
+		}
+		this.saveTimeoutId = window.setTimeout(() => {
+			this.saveTimeoutId = null;
+			void this.saveHistoryStackImmediate();
+		}, 2000);
+	}
+
+	private async saveHistoryStackImmediate(): Promise<void> {
+		if (this.saveTimeoutId !== null) {
+			window.clearTimeout(this.saveTimeoutId);
+			this.saveTimeoutId = null;
+		}
+
+		this.cleanupInvalidDbEntries();
+		const entries = this.navStack.getStack();
+
+		if (this.settings.useFolderLocalHistory) {
+			const path = this.getHistoryFilePath();
+			try {
+				await this.app.vault.adapter.write(path, JSON.stringify(entries, null, 2));
+			} catch (err) {
+				console.error('Cursor History: Error writing folder local history file:', err);
+			}
+		} else {
+			const rawData = (await this.loadData()) || {};
+			rawData.historyStack = entries;
+			await this.saveData(rawData);
+		}
+	}
+
+	private recordCurrentPosition(isJump = false): void {
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (!view?.file) return;
+		this.recordPositionForView(view, isJump);
+	}
+
+	private recordPositionForLeaf(leaf: WorkspaceLeaf, isJump = false): void {
+		if (leaf.view instanceof MarkdownView && leaf.view.file) {
+			this.recordPositionForView(leaf.view, isJump);
+		}
+	}
+
+	private recordPositionForView(view: MarkdownView, isJump = false): void {
+		const entry = this.getEntryForView(view);
+		if (!entry) return;
+
+		if (!this.isValidFilePath(entry.filePath)) return;
+
+		if (shouldCreateNewEntry(this.currentState, entry, isJump, this.settings.jumpThreshold)) {
+			this.navStack.push(entry);
+		} else {
+			this.navStack.replaceCurrent(entry);
+		}
+
+		this.currentState = entry;
+		this.scheduleHistorySave();
+	}
+
+	private getEntryForView(view: MarkdownView): HistoryEntry | null {
+		if (!view?.file) return null;
+		const mode = view.getMode();
+
+		if (mode === 'preview') {
+			const previewView = view.previewMode;
+			const scrollLine = typeof previewView.getScroll === 'function' ? previewView.getScroll() : 0;
+			const previewEl = view.contentEl.querySelector('.markdown-preview-view');
+			const scrollTop = previewEl ? previewEl.scrollTop : 0;
+
+			const entry: PreviewHistoryEntry = {
+				mode: 'preview',
+				filePath: view.file.path,
+				selection: {
+					scrollTop,
+					scrollLine,
+				},
+				timestamp: Date.now(),
+			};
+			return entry;
+		} else {
+			const editor = view.editor;
+			const from = editor.getCursor('from');
+			const to = editor.getCursor('to');
+
+			const entry: EditHistoryEntry = {
+				mode: 'edit',
+				filePath: view.file.path,
+				selection: {
+					startLine: from.line,
+					startCol: from.ch,
+					endLine: to.line,
+					endCol: to.ch,
+				},
+				timestamp: Date.now(),
+			};
+			return entry;
+		}
+	}
+
 	private async applyDefaultHotkeys() {
-		if (this.pluginData.hotkeyDefaultsApplied) return;
+		if (this.settings.hotkeyDefaultsApplied) return;
 
 		const configPath = `${this.app.vault.configDir}/hotkeys.json`;
 		let hotkeys: Record<string, ObsidianHotkey[]> = {};
@@ -116,8 +332,8 @@ export default class CursorHistoryPlugin extends Plugin {
 			}
 		}
 
-		this.pluginData.hotkeyDefaultsApplied = true;
-		await this.saveData(this.pluginData);
+		this.settings.hotkeyDefaultsApplied = true;
+		await this.saveSettings();
 	}
 
 	private buildKeymap(): void {
@@ -156,43 +372,14 @@ export default class CursorHistoryPlugin extends Plugin {
 		return hm.getDefaultHotkeys(commandId) || [];
 	}
 
-	private recordCurrentPosition(isJump = false): void {
-		const entry = this.getActiveEntry();
-		if (!entry) return;
-
-		if (shouldCreateNewEntry(this.currentState, entry, isJump)) {
-			this.navStack.push(entry);
-		} else {
-			this.navStack.replaceCurrent(entry);
-		}
-
-		this.currentState = entry;
-	}
-
-	private getActiveEntry(): HistoryEntry | null {
-		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-		if (!view?.file) return null;
-
-		const editor = view.editor;
-		const from = editor.getCursor('from');
-		const to = editor.getCursor('to');
-
-		return {
-			filePath: view.file.path,
-			selection: {
-				startLine: from.line,
-				startCol: from.ch,
-				endLine: to.line,
-				endCol: to.ch,
-			},
-		};
-	}
-
 	private async goBack(): Promise<void> {
-		const current = this.getActiveEntry();
-		if (current && shouldCreateNewEntry(this.currentState, current)) {
-			this.navStack.push(current);
-			this.currentState = current;
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (view) {
+			const current = this.getEntryForView(view);
+			if (current && shouldCreateNewEntry(this.currentState, current, false, this.settings.jumpThreshold)) {
+				this.navStack.push(current);
+				this.currentState = current;
+			}
 		}
 
 		const entry = this.navStack.goBack();
@@ -200,17 +387,20 @@ export default class CursorHistoryPlugin extends Plugin {
 	}
 
 	private async goForward(): Promise<void> {
-		const current = this.getActiveEntry();
-		if (current && shouldCreateNewEntry(this.currentState, current)) {
-			this.navStack.push(current);
-			this.currentState = current;
+		const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+		if (view) {
+			const current = this.getEntryForView(view);
+			if (current && shouldCreateNewEntry(this.currentState, current, false, this.settings.jumpThreshold)) {
+				this.navStack.push(current);
+				this.currentState = current;
+			}
 		}
 
 		const entry = this.navStack.goForward();
 		if (entry) await this.navigateTo(entry);
 	}
 
-	private async navigateTo(entry: HistoryEntry): Promise<void> {
+	public async navigateTo(entry: HistoryEntry, isAutoRestore = false): Promise<void> {
 		this.isNavigating = true;
 
 		try {
@@ -221,7 +411,9 @@ export default class CursorHistoryPlugin extends Plugin {
 			await leaf.openFile(file);
 
 			const view = this.app.workspace.getActiveViewOfType(MarkdownView);
-			if (view) {
+			if (!view) return;
+
+			if (entry.mode === 'edit') {
 				const editor = view.editor;
 				editor.setSelection(
 					{ line: entry.selection.startLine, ch: entry.selection.startCol },
@@ -234,14 +426,32 @@ export default class CursorHistoryPlugin extends Plugin {
 					},
 					true
 				);
+			} else if (entry.mode === 'preview') {
+				// Wait for Reading View DOM rendering to complete before applying scroll position
+				this.applyPreviewScrollWithRetry(view, entry.selection);
 			}
 
 			this.currentState = entry;
 		} finally {
 			setTimeout(() => {
 				this.isNavigating = false;
-			}, 100);
+			}, 150);
+		}
+	}
+
+	private applyPreviewScrollWithRetry(view: MarkdownView, selection: PreviewSelection, attempts = 0): void {
+		const previewEl = view.contentEl.querySelector('.markdown-preview-view') as HTMLElement | null;
+		const previewView = view.previewMode;
+
+		if (previewEl && previewEl.scrollHeight > 0) {
+			if (typeof previewView.applyScroll === 'function') {
+				previewView.applyScroll(selection.scrollLine);
+			}
+			previewEl.scrollTop = selection.scrollTop;
+		} else if (attempts < 10) {
+			setTimeout(() => {
+				this.applyPreviewScrollWithRetry(view, selection, attempts + 1);
+			}, 30);
 		}
 	}
 }
-
