@@ -5,6 +5,7 @@ import { NavigationStack, HistoryEntry, EditHistoryEntry, PreviewHistoryEntry } 
 import { shouldCreateNewEntry } from './selection-state';
 import { CursorHistorySettings, DEFAULT_SETTINGS, CursorHistorySettingTab } from './settings';
 import { HistoryNavigatorModal } from './history-navigator-modal';
+import { CodeFoldManager } from './code-fold-manager';
 
 // --- Obsidian type augmentation for undocumented APIs ---
 
@@ -41,13 +42,23 @@ export default class CursorHistoryPlugin extends Plugin {
 	private hotkeyExtension: Extension[] = [];
 	private saveTimeoutId: number | null = null;
 	private lastActiveLeaf: WorkspaceLeaf | null = null;
+	private codeFoldManager = new CodeFoldManager(this);
 
 	async onload() {
 		await this.loadSettings();
+		await this.codeFoldManager.init();
 
 		this.addSettingTab(new CursorHistorySettingTab(this.app, this));
 
 		// Commands
+		this.addCommand({
+			id: 'toggle-fold-all-code-blocks',
+			name: 'Toggle fold all code blocks',
+			callback: () => {
+				const current = this.codeFoldManager.getFoldAll();
+				void this.codeFoldManager.setFoldAll(!current);
+			},
+		});
 		this.addCommand({
 			id: 'go-back',
 			name: 'Go back',
