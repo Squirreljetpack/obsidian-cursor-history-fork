@@ -163,6 +163,7 @@ export default class CursorHistoryPlugin extends Plugin {
         const linkEl = target?.closest("a.internal-link");
         if (linkEl) {
           this.recordCurrentPosition();
+          return;
         }
         this.handleReadingViewClick(evt);
       },
@@ -537,43 +538,79 @@ export default class CursorHistoryPlugin extends Plugin {
 
   private previewScrollTimeoutId: number | null = null;
 
+  private getClickedLineFromElement(target: HTMLElement | null): number | null {
+    let el: HTMLElement | null = target;
+    while (el && !el.classList.contains("markdown-preview-view")) {
+      const dataLine = el.getAttribute("data-line");
+      if (dataLine !== null && dataLine !== "") {
+        const num = parseInt(dataLine, 10);
+        if (!isNaN(num)) return num;
+      }
+
+      if (el.dataset && el.dataset.line) {
+        const num = parseInt(el.dataset.line, 10);
+        if (!isNaN(num)) return num;
+      }
+
+      const sec = (el as any).sectionInfo || (el as any).SectionInfo;
+      if (sec && typeof sec.lineStart === "number") {
+        return sec.lineStart;
+      }
+      if (sec && typeof sec.line === "number") {
+        return sec.line;
+      }
+
+      el = el.parentElement;
+    }
+    return null;
+  }
+
   private handleReadingViewClick(evt: MouseEvent): void {
     const target = evt.target as HTMLElement | null;
     if (!target || !target.closest(".markdown-preview-view")) return;
+    if (target.closest("a.internal-link, button, input, textarea, select")) return;
 
     const view = this.app.workspace.getActiveViewOfType(MarkdownView);
     if (!view || view.getMode() !== "preview" || !view.file) return;
 
-    setTimeout(() => {
-      const incoming = this.getEntryForView(view);
-      if (!incoming || incoming.mode !== "preview") return;
+    const clickedLine = this.getClickedLineFromElement(target);
+    if (clickedLine === null) return;
 
-      if (
-        this.currentState && this.currentState.mode === "preview" && this.currentState.filePath === incoming.filePath
-      ) {
-        const currSel = this.currentState.selection;
-        const incSel = incoming.selection;
-        const scrollLineDiff = Math.abs(currSel.scrollLine - incSel.scrollLine);
-        const scrollTopDiff = Math.abs(currSel.scrollTop - incSel.scrollTop);
+    const previewEl = view.contentEl.querySelector(".markdown-preview-view") as HTMLElement | null;
+    const scrollTop = previewEl ? previewEl.scrollTop : 0;
 
-        const isIdentical = (currSel.scrollLine !== 0 || incSel.scrollLine !== 0)
-          ? (scrollLineDiff === 0 && scrollTopDiff < 10)
-          : (scrollTopDiff < 10);
+    const entry: PreviewHistoryEntry = {
+      mode: "preview",
+      filePath: view.file.path,
+      selection: {
+        scrollTop,
+        scrollLine: clickedLine,
+      },
+      timestamp: Date.now(),
+    };
 
-        const isSimilar = !isIdentical && (
-          (currSel.scrollLine !== 0 || incSel.scrollLine !== 0)
-            ? (scrollLineDiff <= this.settings.previewJumpThreshold)
-            : (scrollTopDiff <= this.settings.previewJumpThreshold * 30)
-        );
+    if (
+      shouldCreateNewEntry(
+        this.currentState,
+        entry,
+        this.settings.editJumpThreshold,
+        this.settings.previewJumpThreshold,
+      )
+    ) {
+      this.navStack.push(entry);
+    } else {
+      this.navStack.replaceCurrent(entry);
+    }
 
-        if (isSimilar) {
-          this.navStack.replaceCurrent(incoming);
-          this.navStack.push(incoming);
-          this.currentState = incoming;
-          this.scheduleHistorySave();
-        }
-      }
-    }, 50);
+    let filePos = this.fileLastPositions.get(entry.filePath);
+    if (!filePos) {
+      filePos = {};
+      this.fileLastPositions.set(entry.filePath, filePos);
+    }
+    filePos.preview = { selection: entry.selection, timestamp: entry.timestamp };
+
+    this.currentState = entry;
+    this.scheduleHistorySave();
   }
 
   private handleReadingViewScroll(): void {
@@ -586,7 +623,7 @@ export default class CursorHistoryPlugin extends Plugin {
     this.previewScrollTimeoutId = window.setTimeout(() => {
       this.previewScrollTimeoutId = null;
       this.recordCurrentPosition();
-    }, 100);
+    }, this.settings.scrollDebounceMs ?? 100);
   }
 
   private recordCurrentPosition(): void {

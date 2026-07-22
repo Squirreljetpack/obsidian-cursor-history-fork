@@ -44,8 +44,15 @@ export class CurrentFileHistoryModal extends FuzzySuggestModal<HistoryEntry> {
   getItemText(item: HistoryEntry): string {
     const lineNum = item.mode === "edit" ? item.selection.startLine + 1 : Math.floor(item.selection.scrollLine) + 1;
     const lineIndex = lineNum - 1;
-    const lineContent = (this.lines[lineIndex] ?? "").trim();
-    return `${lineNum}: ${lineContent}`;
+    let lineContent = (this.lines[lineIndex] ?? "").trim();
+    if (lineContent) {
+      const maxLen = this.plugin.settings.maxLineLength ?? 120;
+      if (lineContent.length > maxLen) {
+        lineContent = lineContent.substring(0, maxLen) + "...";
+      }
+      return `${lineNum}: ${lineContent}`;
+    }
+    return `${lineNum}: `;
   }
 
   renderSuggestion(match: FuzzyMatch<HistoryEntry>, el: HTMLElement): void {

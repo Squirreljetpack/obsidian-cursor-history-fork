@@ -9,8 +9,10 @@ export interface CursorHistorySettings {
   recordOnFileSwitch: boolean;
   showDateInModal: boolean;
   maxEntries: number;
+  maxLineLength: number;
   editJumpThreshold: number;
   previewJumpThreshold: number;
+  scrollDebounceMs: number;
 }
 
 export const DEFAULT_SETTINGS: CursorHistorySettings = {
@@ -21,8 +23,10 @@ export const DEFAULT_SETTINGS: CursorHistorySettings = {
   recordOnFileSwitch: false,
   showDateInModal: false,
   maxEntries: 50,
+  maxLineLength: 120,
   editJumpThreshold: 1,
   previewJumpThreshold: 10,
+  scrollDebounceMs: 100,
 };
 
 export class CursorHistorySettingTab extends PluginSettingTab {
@@ -141,6 +145,22 @@ export class CursorHistorySettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Max line length in current file history")
+      .setDesc("Maximum line length (characters) to display in current file cursor history modal before ellipsizing (default: 120)")
+      .addText(text =>
+        text
+          .setPlaceholder("120")
+          .setValue(String(this.plugin.settings.maxLineLength))
+          .onChange(async value => {
+            const num = parseInt(value, 10);
+            if (!isNaN(num) && num > 0) {
+              this.plugin.settings.maxLineLength = num;
+              await this.plugin.saveSettings();
+            }
+          })
+      );
+
+    new Setting(containerEl)
       .setName("Edit mode jump threshold (lines)")
       .setDesc("Minimum line difference required to record a new history entry during editing (default: 1)")
       .addText(text =>
@@ -167,6 +187,22 @@ export class CursorHistorySettingTab extends PluginSettingTab {
             const num = parseInt(value, 10);
             if (!isNaN(num) && num >= 1) {
               this.plugin.settings.previewJumpThreshold = num;
+              await this.plugin.saveSettings();
+            }
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Reading mode scroll debounce (ms)")
+      .setDesc("Delay in milliseconds to debounce scroll events in Reading mode before recording position (default: 100)")
+      .addText(text =>
+        text
+          .setPlaceholder("100")
+          .setValue(String(this.plugin.settings.scrollDebounceMs))
+          .onChange(async value => {
+            const num = parseInt(value, 10);
+            if (!isNaN(num) && num >= 0) {
+              this.plugin.settings.scrollDebounceMs = num;
               await this.plugin.saveSettings();
             }
           })

@@ -20,7 +20,8 @@ export class RecentFilesModal extends FuzzySuggestModal<RecentFileItem> {
   }
 
   getItemText(item: RecentFileItem): string {
-    return item.file.path;
+    const path = item.file.path;
+    return path.endsWith(".md") ? path.slice(0, -3) : path;
   }
 
   renderSuggestion(match: FuzzyMatch<RecentFileItem>, el: HTMLElement): void {
