@@ -2,19 +2,31 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2026-07-22
+
+### Changed
+
+- **Improved Preview Click Tracking**: Replaced scroll-position-based detection with direct DOM line-element detection for more accurate cursor history entries in Reading mode. Interactive elements (links, buttons, inputs) are now excluded from click tracking.
+- **Max Line Length Setting**: New `Max line length in current file history` setting to truncate long line content displayed in the current file cursor history modal (default: 120).
+- **Scroll Debounce Setting**: New `Reading mode scroll debounce (ms)` setting to configure how long to wait after the last scroll event before recording position in Reading mode (default: 100).
+- **Recent Files Modal Display**: Strip `.md` extension from file paths displayed in the recently opened files modal.
+
 ## [1.2.0] - 2026-07-22
 
 ### Added
+
 - **Recently Opened Files Modal**: Command `Open recently opened files` to fuzzy search recently opened notes ordered by recency (excluding the active file) and jump directly to them.
 - **Current File Navigation History Modal**: Command `Open current file cursor history` to fuzzy search in-memory cursor navigation history for the active file, displayed as `line: line_initial_content`.
 - **Show Date in Modals Setting**: Added an option in settings to display formatted timestamps in gray next to items in history modals.
 
 ### Changed
+
 - **Per-File Cursor Histories**: Replaced single persistent stack history with per-file cursor history storage (`fileLastPositions`) without redundant basename storage.
 
 ## [1.1.0] - 2026-07-21
 
 ### Added
+
 - **Separate Mode Stacks & Command Hotkeys**:
   - Maintained distinct, isolated navigation stacks for Edit Mode and Reading Mode.
   - Set default hotkeys for `Go back` and `Go forward` to `Cmd + [` (`Mod+[`) and `Cmd + ]` (`Mod+]`).
