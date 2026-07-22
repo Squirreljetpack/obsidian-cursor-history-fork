@@ -3,7 +3,14 @@ import { EditorView, keymap, ViewUpdate } from "@codemirror/view";
 import { MarkdownView, Notice, Plugin, TFile, WorkspaceLeaf } from "obsidian";
 import { CodeFoldManager } from "./code-fold-manager";
 import { HistoryNavigatorModal } from "./history-navigator-modal";
-import { EditHistoryEntry, HistoryEntry, NavigationStack, PreviewHistoryEntry } from "./navigation-stack";
+import {
+  EditHistoryEntry,
+  FileHistoryMap,
+  FileLastPositions,
+  HistoryEntry,
+  NavigationStack,
+  PreviewHistoryEntry,
+} from "./navigation-stack";
 import { shouldCreateNewEntry } from "./selection-state";
 import { CursorHistorySettings, CursorHistorySettingTab, DEFAULT_SETTINGS } from "./settings";
 
@@ -37,6 +44,7 @@ const DESIRED_HOTKEYS: Record<string, ObsidianHotkey> = {
 export default class CursorHistoryPlugin extends Plugin {
   settings: CursorHistorySettings = DEFAULT_SETTINGS;
   private navStack = new NavigationStack(50);
+  private fileLastPositions = new Map<string, FileLastPositions>();
   private currentState: HistoryEntry | null = null;
   private isNavigating = false;
   private hotkeyExtension: Extension[] = [];
@@ -95,6 +103,11 @@ export default class CursorHistoryPlugin extends Plugin {
 
         if (mode === "source") {
           this.navStack.clearForFile(filePath, "edit");
+          const pos = this.fileLastPositions.get(filePath);
+          if (pos) {
+            delete pos.edit;
+            if (!pos.edit && !pos.preview) this.fileLastPositions.delete(filePath);
+          }
           if (this.currentState && this.currentState.filePath === filePath && this.currentState.mode === "edit") {
             this.currentState = null;
           }
@@ -103,6 +116,11 @@ export default class CursorHistoryPlugin extends Plugin {
         } else {
           await this.codeFoldManager.clearFileFoldHistory(filePath);
           this.navStack.clearForFile(filePath, "preview");
+          const pos = this.fileLastPositions.get(filePath);
+          if (pos) {
+            delete pos.preview;
+            if (!pos.edit && !pos.preview) this.fileLastPositions.delete(filePath);
+          }
           if (this.currentState && this.currentState.filePath === filePath && this.currentState.mode === "preview") {
             this.currentState = null;
           }
@@ -155,17 +173,17 @@ export default class CursorHistoryPlugin extends Plugin {
       }),
     );
 
-    // Listen for file opening in normal way to restore scroll position
+    // Listen for file opening in normal way to restore position from DB
     this.registerEvent(
       this.app.workspace.on("file-open", (file) => {
         if (!file || this.isNavigating || !this.settings.restoreScrollPosition) return;
 
-        const entry = this.navStack.findLatestForFile(file.path);
-        if (entry) {
-          setTimeout(() => {
-            void this.navigateTo(entry, true);
-          }, 50);
-        }
+        const dbRecord = this.fileLastPositions.get(file.path);
+        if (!dbRecord) return;
+
+        setTimeout(() => {
+          void this.restorePositionForOpenFile(file.path, dbRecord);
+        }, 50);
       }),
     );
 
@@ -236,29 +254,150 @@ export default class CursorHistoryPlugin extends Plugin {
 
   private cleanupInvalidDbEntries(): void {
     this.navStack.purgeInvalid(this.isValidFilePath.bind(this));
+    for (const filePath of Array.from(this.fileLastPositions.keys())) {
+      if (!this.isValidFilePath(filePath)) {
+        this.fileLastPositions.delete(filePath);
+      }
+    }
+  }
+
+  private async restorePositionForOpenFile(filePath: string, dbRecord: FileLastPositions): Promise<void> {
+    const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!view || view.file?.path !== filePath) return;
+
+    let targetMode: "edit" | "preview" | null = null;
+
+    if (this.settings.rememberModeOnFileOpen) {
+      const editTs = dbRecord.edit ? dbRecord.edit.timestamp : -1;
+      const previewTs = dbRecord.preview ? dbRecord.preview.timestamp : -1;
+
+      if (editTs >= 0 || previewTs >= 0) {
+        targetMode = editTs >= previewTs ? "edit" : "preview";
+      }
+    } else {
+      const currentViewMode = view.getMode();
+      targetMode = currentViewMode === "source" ? "edit" : "preview";
+    }
+
+    if (!targetMode) return;
+
+    if (this.settings.rememberModeOnFileOpen) {
+      const currentObsidianMode = view.getMode();
+      const desiredObsidianMode = targetMode === "edit" ? "source" : "preview";
+      if (currentObsidianMode !== desiredObsidianMode) {
+        await view.setState({ mode: desiredObsidianMode }, { history: false });
+      }
+    }
+
+    if (targetMode === "edit" && dbRecord.edit) {
+      const entry: HistoryEntry = {
+        mode: "edit",
+        filePath,
+        selection: dbRecord.edit.selection,
+        timestamp: dbRecord.edit.timestamp,
+      };
+      await this.navigateTo(entry, true);
+    } else if (targetMode === "preview" && dbRecord.preview) {
+      const entry: HistoryEntry = {
+        mode: "preview",
+        filePath,
+        selection: dbRecord.preview.selection,
+        timestamp: dbRecord.preview.timestamp,
+      };
+      await this.navigateTo(entry, true);
+    }
   }
 
   private async loadHistoryStack(): Promise<void> {
-    let loadedEntries: HistoryEntry[] = [];
+    let rawContent: any = null;
+    this.fileLastPositions.clear();
 
     if (this.settings.useFolderLocalHistory) {
       const path = this.getHistoryFilePath();
       try {
         if (await this.app.vault.adapter.exists(path)) {
           const content = await this.app.vault.adapter.read(path);
-          loadedEntries = JSON.parse(content);
+          rawContent = JSON.parse(content);
         }
       } catch (err) {
         console.error("Cursor History: Error reading folder local history file:", err);
       }
     } else {
       const rawData = (await this.loadData()) || {};
-      if (Array.isArray(rawData.historyStack)) {
-        loadedEntries = rawData.historyStack;
+      rawContent = rawData.historyStack;
+    }
+
+    if (Array.isArray(rawContent)) {
+      for (const entry of rawContent as HistoryEntry[]) {
+        if (entry && entry.filePath && entry.selection) {
+          const filePos = this.fileLastPositions.get(entry.filePath) || {};
+          const ts = entry.timestamp || Date.now();
+          if (entry.mode === "edit") {
+            if (!filePos.edit || ts >= filePos.edit.timestamp) {
+              filePos.edit = { selection: entry.selection, timestamp: ts };
+            }
+          } else if (entry.mode === "preview") {
+            if (!filePos.preview || ts >= filePos.preview.timestamp) {
+              filePos.preview = { selection: entry.selection, timestamp: ts };
+            }
+          }
+          this.fileLastPositions.set(entry.filePath, filePos);
+        }
+      }
+    } else if (rawContent && typeof rawContent === "object") {
+      for (const [filePath, value] of Object.entries(rawContent)) {
+        if (Array.isArray(value)) {
+          const filePos: FileLastPositions = {};
+          for (const item of value) {
+            if (item && item.mode && item.selection) {
+              const ts = item.timestamp || Date.now();
+              if (item.mode === "edit") {
+                if (!filePos.edit || ts >= filePos.edit.timestamp) {
+                  filePos.edit = { selection: item.selection, timestamp: ts };
+                }
+              } else if (item.mode === "preview") {
+                if (!filePos.preview || ts >= filePos.preview.timestamp) {
+                  filePos.preview = { selection: item.selection, timestamp: ts };
+                }
+              }
+            }
+          }
+          if (filePos.edit || filePos.preview) {
+            this.fileLastPositions.set(filePath, filePos);
+          }
+        } else if (value && typeof value === "object") {
+          const val = value as any;
+          if (val.edit || val.preview) {
+            const filePos: FileLastPositions = {};
+            if (val.edit && val.edit.selection) {
+              filePos.edit = {
+                selection: val.edit.selection,
+                timestamp: val.edit.timestamp || Date.now(),
+              };
+            }
+            if (val.preview && val.preview.selection) {
+              filePos.preview = {
+                selection: val.preview.selection,
+                timestamp: val.preview.timestamp || Date.now(),
+              };
+            }
+            this.fileLastPositions.set(filePath, filePos);
+          } else if (val.mode && val.selection) {
+            const filePos: FileLastPositions = {};
+            const ts = val.timestamp || Date.now();
+            if (val.mode === "edit") {
+              filePos.edit = { selection: val.selection, timestamp: ts };
+            } else if (val.mode === "preview") {
+              filePos.preview = { selection: val.selection, timestamp: ts };
+            }
+            this.fileLastPositions.set(filePath, filePos);
+          }
+        }
       }
     }
 
-    this.navStack.setStack(loadedEntries);
+    // Note: In-memory NavigationStack starts empty upon startup as requested.
+    this.navStack.setStack([]);
     this.cleanupInvalidDbEntries();
   }
 
@@ -279,18 +418,22 @@ export default class CursorHistoryPlugin extends Plugin {
     }
 
     this.cleanupInvalidDbEntries();
-    const entries = this.navStack.getStack();
+
+    const fileMap: FileHistoryMap = {};
+    for (const [filePath, pos] of this.fileLastPositions.entries()) {
+      fileMap[filePath] = pos;
+    }
 
     if (this.settings.useFolderLocalHistory) {
       const path = this.getHistoryFilePath();
       try {
-        await this.app.vault.adapter.write(path, JSON.stringify(entries, null, 2));
+        await this.app.vault.adapter.write(path, JSON.stringify(fileMap, null, 2));
       } catch (err) {
         console.error("Cursor History: Error writing folder local history file:", err);
       }
     } else {
       const rawData = (await this.loadData()) || {};
-      rawData.historyStack = entries;
+      rawData.historyStack = fileMap;
       await this.saveData(rawData);
     }
   }
@@ -378,6 +521,18 @@ export default class CursorHistoryPlugin extends Plugin {
       this.navStack.push(entry);
     } else {
       this.navStack.replaceCurrent(entry);
+    }
+
+    let filePos = this.fileLastPositions.get(entry.filePath);
+    if (!filePos) {
+      filePos = {};
+      this.fileLastPositions.set(entry.filePath, filePos);
+    }
+    const ts = entry.timestamp || Date.now();
+    if (entry.mode === "edit") {
+      filePos.edit = { selection: entry.selection, timestamp: ts };
+    } else {
+      filePos.preview = { selection: entry.selection, timestamp: ts };
     }
 
     this.currentState = entry;

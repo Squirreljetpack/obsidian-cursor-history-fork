@@ -14,17 +14,29 @@ export interface EditHistoryEntry {
 	mode: 'edit';
 	filePath: string;
 	selection: EditSelection;
-	timestamp?: number;
+	timestamp: number;
 }
 
 export interface PreviewHistoryEntry {
 	mode: 'preview';
 	filePath: string;
 	selection: PreviewSelection;
-	timestamp?: number;
+	timestamp: number;
 }
 
 export type HistoryEntry = EditHistoryEntry | PreviewHistoryEntry;
+
+export interface FileCursorPosition<T = EditSelection | PreviewSelection> {
+	selection: T;
+	timestamp: number;
+}
+
+export interface FileLastPositions {
+	edit?: FileCursorPosition<EditSelection>;
+	preview?: FileCursorPosition<PreviewSelection>;
+}
+
+export type FileHistoryMap = Record<string, FileLastPositions>;
 
 export class NavigationStack {
 	private editStack: EditHistoryEntry[] = [];
@@ -168,6 +180,10 @@ export class NavigationStack {
 		if (mode === 'edit') return [...this.editStack];
 		if (mode === 'preview') return [...this.previewStack];
 		return [...this.editStack, ...this.previewStack];
+	}
+
+	getStackForFile(filePath: string, mode?: 'edit' | 'preview'): HistoryEntry[] {
+		return this.getStack(mode).filter(e => e.filePath === filePath);
 	}
 
 	setStack(entries: HistoryEntry[]): void {

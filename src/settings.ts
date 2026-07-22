@@ -5,6 +5,7 @@ export interface CursorHistorySettings {
   hotkeyDefaultsApplied: boolean;
   useFolderLocalHistory: boolean;
   restoreScrollPosition: boolean;
+  rememberModeOnFileOpen: boolean;
   recordOnFileSwitch: boolean;
   maxEntries: number;
   editJumpThreshold: number;
@@ -15,6 +16,7 @@ export const DEFAULT_SETTINGS: CursorHistorySettings = {
   hotkeyDefaultsApplied: false,
   useFolderLocalHistory: false,
   restoreScrollPosition: true,
+  rememberModeOnFileOpen: false,
   recordOnFileSwitch: false,
   maxEntries: 50,
   editJumpThreshold: 1,
@@ -79,6 +81,18 @@ export class CursorHistorySettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.restoreScrollPosition)
           .onChange(async value => {
             this.plugin.settings.restoreScrollPosition = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Remember mode on file open")
+      .setDesc("Automatically switch file mode (edit/reading mode) to the most recently used mode when opening a file")
+      .addToggle(toggle =>
+        toggle
+          .setValue(this.plugin.settings.rememberModeOnFileOpen)
+          .onChange(async value => {
+            this.plugin.settings.rememberModeOnFileOpen = value;
             await this.plugin.saveSettings();
           })
       );
