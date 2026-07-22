@@ -7,6 +7,7 @@ export interface CursorHistorySettings {
   restoreScrollPosition: boolean;
   rememberModeOnFileOpen: boolean;
   recordOnFileSwitch: boolean;
+  showDateInModal: boolean;
   maxEntries: number;
   editJumpThreshold: number;
   previewJumpThreshold: number;
@@ -18,6 +19,7 @@ export const DEFAULT_SETTINGS: CursorHistorySettings = {
   restoreScrollPosition: true,
   rememberModeOnFileOpen: false,
   recordOnFileSwitch: false,
+  showDateInModal: false,
   maxEntries: 50,
   editJumpThreshold: 1,
   previewJumpThreshold: 10,
@@ -105,6 +107,18 @@ export class CursorHistorySettingTab extends PluginSettingTab {
           .setValue(this.plugin.settings.recordOnFileSwitch)
           .onChange(async value => {
             this.plugin.settings.recordOnFileSwitch = value;
+            await this.plugin.saveSettings();
+          })
+      );
+
+    new Setting(containerEl)
+      .setName("Show date in modals")
+      .setDesc("Display formatted date/time in gray for entries in history modals")
+      .addToggle(toggle =>
+        toggle
+          .setValue(this.plugin.settings.showDateInModal)
+          .onChange(async value => {
+            this.plugin.settings.showDateInModal = value;
             await this.plugin.saveSettings();
           })
       );

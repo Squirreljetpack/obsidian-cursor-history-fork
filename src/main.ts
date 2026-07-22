@@ -2,7 +2,9 @@ import { Extension } from "@codemirror/state";
 import { EditorView, keymap, ViewUpdate } from "@codemirror/view";
 import { MarkdownView, Notice, Plugin, TFile, WorkspaceLeaf } from "obsidian";
 import { CodeFoldManager } from "./code-fold-manager";
+import { CurrentFileHistoryModal } from "./current-file-history-modal";
 import { HistoryNavigatorModal } from "./history-navigator-modal";
+import { RecentFileItem, RecentFilesModal } from "./recent-files-modal";
 import {
   EditHistoryEntry,
   FileHistoryMap,
@@ -10,6 +12,7 @@ import {
   HistoryEntry,
   NavigationStack,
   PreviewHistoryEntry,
+  PreviewSelection,
 } from "./navigation-stack";
 import { shouldCreateNewEntry } from "./selection-state";
 import { CursorHistorySettings, CursorHistorySettingTab, DEFAULT_SETTINGS } from "./settings";
@@ -85,6 +88,27 @@ export default class CursorHistoryPlugin extends Plugin {
       name: "Open cursor history",
       callback: () => {
         new HistoryNavigatorModal(this.app, this).open();
+      },
+    });
+
+    this.addCommand({
+      id: "open-recently-opened-files",
+      name: "Open recently opened files",
+      callback: () => {
+        new RecentFilesModal(this.app, this).open();
+      },
+    });
+
+    this.addCommand({
+      id: "open-current-file-cursor-history",
+      name: "Open current file cursor history",
+      callback: () => {
+        const view = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!view || !view.file) {
+          new Notice("No active file to show cursor history.");
+          return;
+        }
+        new CurrentFileHistoryModal(this.app, this).open();
       },
     });
 
@@ -214,6 +238,79 @@ export default class CursorHistoryPlugin extends Plugin {
 
   getNavStack(): NavigationStack {
     return this.navStack;
+  }
+
+  public getRecentlyOpenedFiles(): RecentFileItem[] {
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    const activePath = activeView?.file?.path;
+
+    const timestamps = new Map<string, number>();
+
+    for (const [filePath, pos] of this.fileLastPositions.entries()) {
+      if (activePath && filePath === activePath) continue;
+      const editTs = pos.edit?.timestamp ?? 0;
+      const previewTs = pos.preview?.timestamp ?? 0;
+      const maxTs = Math.max(editTs, previewTs);
+      if (maxTs > 0) {
+        timestamps.set(filePath, maxTs);
+      }
+    }
+
+    const stack = this.navStack.getStack();
+    for (const entry of stack) {
+      if (activePath && entry.filePath === activePath) continue;
+      const currentMax = timestamps.get(entry.filePath) ?? 0;
+      const ts = entry.timestamp ?? 0;
+      if (ts > currentMax) {
+        timestamps.set(entry.filePath, ts);
+      }
+    }
+
+    const sortedPaths = Array.from(timestamps.keys()).sort((a, b) => {
+      return (timestamps.get(b) ?? 0) - (timestamps.get(a) ?? 0);
+    });
+
+    const result: RecentFileItem[] = [];
+    for (const path of sortedPaths) {
+      if (this.isValidFilePath(path)) {
+        const file = this.app.vault.getAbstractFileByPath(path);
+        if (file instanceof TFile) {
+          const timestamp = timestamps.get(path) ?? file.stat.mtime;
+          result.push({ file, timestamp });
+        }
+      }
+    }
+
+    return result;
+  }
+
+  public async openRecentFile(file: TFile): Promise<void> {
+    const navEntry = this.navStack.findLatestForFile(file.path);
+    if (navEntry) {
+      await this.navigateTo(navEntry);
+      return;
+    }
+
+    const dbRecord = this.fileLastPositions.get(file.path);
+    if (dbRecord) {
+      const editTs = dbRecord.edit?.timestamp ?? -1;
+      const previewTs = dbRecord.preview?.timestamp ?? -1;
+      if (editTs >= 0 || previewTs >= 0) {
+        const mode = editTs >= previewTs ? "edit" : "preview";
+        const pos = mode === "edit" ? dbRecord.edit! : dbRecord.preview!;
+        const entry: HistoryEntry = {
+          mode,
+          filePath: file.path,
+          selection: pos.selection as any,
+          timestamp: pos.timestamp,
+        };
+        await this.navigateTo(entry);
+        return;
+      }
+    }
+
+    const leaf = this.app.workspace.getLeaf(false);
+    await leaf.openFile(file);
   }
 
   updateMaxEntries(size: number): void {

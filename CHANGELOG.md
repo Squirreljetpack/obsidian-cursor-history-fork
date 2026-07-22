@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.0] - 2026-07-22
+
+### Added
+- **Recently Opened Files Modal**: Command `Open recently opened files` to fuzzy search recently opened notes ordered by recency and jump directly to them.
+- **Current File Navigation History Modal**: Command `Open current file cursor history` to fuzzy search in-memory cursor navigation history for the active file, displayed as `line: line_initial_content`.
+
+### Changed
+- **Per-File Cursor Histories**: Replaced single persistent stack history with per-file cursor history storage (`fileLastPositions`) without redundant basename storage.
+
 ## [1.1.0] - 2026-07-21
 
 ### Added

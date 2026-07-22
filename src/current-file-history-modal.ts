@@ -2,13 +2,25 @@ import { App, FuzzyMatch, FuzzySuggestModal, MarkdownView } from "obsidian";
 import type CursorHistoryPlugin from "./main";
 import { HistoryEntry } from "./navigation-stack";
 
-export class HistoryNavigatorModal extends FuzzySuggestModal<HistoryEntry> {
+export class CurrentFileHistoryModal extends FuzzySuggestModal<HistoryEntry> {
   private plugin: CursorHistoryPlugin;
+  private lines: string[] = [];
 
   constructor(app: App, plugin: CursorHistoryPlugin) {
     super(app);
     this.plugin = plugin;
-    this.setPlaceholder("Type to search cursor history...");
+    this.setPlaceholder("Type to search current file cursor history...");
+  }
+
+  onOpen(): void {
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (activeView) {
+      const content = activeView.editor ? activeView.editor.getValue() : (activeView.data || "");
+      this.lines = content.split("\n");
+    } else {
+      this.lines = [];
+    }
+    super.onOpen();
   }
 
   private getCurrentMode(): "edit" | "preview" {
@@ -17,19 +29,23 @@ export class HistoryNavigatorModal extends FuzzySuggestModal<HistoryEntry> {
       const mode = activeView.getMode();
       return mode === "source" ? "edit" : "preview";
     }
-    // Default to read mode if no active markdown view detected
     return "preview";
   }
 
   getItems(): HistoryEntry[] {
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!activeView || !activeView.file) return [];
+
     const mode = this.getCurrentMode();
-    const stack = this.plugin.getNavStack().getStack(mode);
+    const stack = this.plugin.getNavStack().getStackForFile(activeView.file.path, mode);
     return stack.slice().reverse();
   }
 
   getItemText(item: HistoryEntry): string {
-    const line = item.mode === "edit" ? item.selection.startLine + 1 : Math.floor(item.selection.scrollLine) + 1;
-    return `${line}: ${item.filePath}`;
+    const lineNum = item.mode === "edit" ? item.selection.startLine + 1 : Math.floor(item.selection.scrollLine) + 1;
+    const lineIndex = lineNum - 1;
+    const lineContent = (this.lines[lineIndex] ?? "").trim();
+    return `${lineNum}: ${lineContent}`;
   }
 
   renderSuggestion(match: FuzzyMatch<HistoryEntry>, el: HTMLElement): void {

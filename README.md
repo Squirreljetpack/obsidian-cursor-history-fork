@@ -8,6 +8,8 @@ An [Obsidian](https://obsidian.md) plugin that tracks cursor position history ac
 - **Position Heuristic**: Configurable line threshold (default 10 lines) creates history entries on larger jumps while updating in place for small movements.
 - **Link Jump Tracking**: Intercepts internal link clicks (`[[note]]`) to capture your source position before navigation occurs.
 - **History Navigator Modal**: Fuzzy search history modal (`Cursor History: Open history navigator`) to preview and jump to any recorded position for your active mode.
+- **Recently Opened Files Modal**: Fuzzy search modal (`Cursor History: Open recently opened files`) to quickly switch to recently opened files with position restoration.
+- **Current File History Modal**: Fuzzy search modal (`Cursor History: Open current file cursor history`) to view and jump between cursor positions within the active file (`line: line_initial_content`).
 - **Scroll Position Restoration**: Restores exact scroll/line positions automatically when reopening files.
 - **Folder-Local History**: Optional persistence to `.obsidian/cursor-history.json` inside your vault.
 - **Code Block Folding (Reading Mode)**: Toggle fold code blocks in Reading mode with state persisted in `.obsidian/code-fold-history.json` and automatic pruning of missing block signatures.
@@ -36,6 +38,8 @@ Default keybindings are set up automatically on first install:
 | Cursor History: Go back | Cmd+[ (`Mod+[`) |
 | Cursor History: Go forward | Cmd+] (`Mod+]`) |
 | Cursor History: Open history navigator | (Unbound) |
+| Cursor History: Open recently opened files | (Unbound) |
+| Cursor History: Open current file cursor history | (Unbound) |
 
 To change them, open **Settings > Hotkeys** and search for "Cursor History".
 
