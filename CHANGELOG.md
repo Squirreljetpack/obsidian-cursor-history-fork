@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.1] - 2026-07-24
+
+### Changed
+
+- **Subfolder History Location**: Moved vault-level history files into `.obsidian/cursor-history/` subfolder (`code-fold.json` and `cursor.json`) with automatic directory creation.
+
 ## [1.3.0] - 2026-07-22
 
 ### Changed
